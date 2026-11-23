@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
+  issues: write
 
 jobs:
   sync:
@@ -34,7 +34,9 @@ jobs:
           fi
 
       - name: Mescla a versão da Receita
+        id: merge
         if: steps.check.outputs.atualizado == 'false'
+        continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -42,26 +44,43 @@ jobs:
           git merge --no-edit upstream/main
 
       - uses: actions/setup-go@v5
-        if: steps.check.outputs.atualizado == 'false'
+        if: steps.check.outputs.atualizado == 'false' && steps.merge.outcome == 'success'
         with:
           go-version-file: go.mod
 
       - name: Testes
-        if: steps.check.outputs.atualizado == 'false'
+        id: tests
+        if: steps.check.outputs.atualizado == 'false' && steps.merge.outcome == 'success'
+        continue-on-error: true
         run: |
           go vet ./...
           go test -race -count=1 ./...
 
-      - name: Abre o PR de sincronização
-        if: steps.check.outputs.atualizado == 'false'
+      - name: Publica no main
+        if: steps.check.outputs.atualizado == 'false' && steps.merge.outcome == 'success' && steps.tests.outcome == 'success'
+        run: |
+          git push origin "HEAD:main"
+          git push origin --tags
+
+      - name: Abre issue quando precisa de revisão
+        if: steps.check.outputs.atualizado == 'false' && (steps.merge.outcome != 'success' || steps.tests.outcome != 'success')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           BRANCH="sync/receita-${{ steps.check.outputs.sha }}"
-          git push origin "$BRANCH" --tags
-          if gh pr list --head "$BRANCH" --json number --jq '.[0].number' | grep -q .; then
+          if [ "${{ steps.merge.outcome }}" = "success" ]; then
+            git push origin "$BRANCH"
+            MOTIVO="Os testes falharam depois de trazer a versão da Receita."
+          else
+            git merge --abort || true
+            MOTIVO="A versão da Receita tem conflito com o pacote pkg/danfse."
+          fi
+          TITULO="Sincronização com a Receita precisa de revisão (${{ steps.check.outputs.sha }})"
+          if gh issue list --state open --search "$TITULO" --json number --jq '.[0].number' | grep -q .; then
             exit 0
           fi
-          gh pr create --base main --head "$BRANCH" \
-            --title "Sincroniza com a Receita (${{ steps.check.outputs.sha }})" \
-            --body "Traz as mudanças do repositório oficial da Receita Federal. Os testes da Receita e do pacote pkg/danfse passaram."
+          gh issue create --title "$TITULO" --body "$MOTIVO
+
+          Branch: \`$BRANCH\`
+          Comparar: ${{ github.server_url }}/${{ github.repository }}/compare/main...$BRANCH
+          Execução: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

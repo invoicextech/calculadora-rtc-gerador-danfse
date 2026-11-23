@@ -5,7 +5,7 @@ Este repositório é um fork do [gerador oficial do DANFSe da Receita Federal](h
 O código da Receita não é alterado. O fork acrescenta apenas:
 
 - `pkg/danfse`: pacote público que expõe o gerador da Receita (`NovoGerador` e `Gerar`) para ser importado por outros módulos Go, já que o código original fica em `internal/`;
-- `.github/workflows/sync-upstream.yml`: workflow diário que traz as mudanças da Receita, roda os testes e abre um PR de sincronização.
+- `.github/workflows/sync-upstream.yml`: workflow diário que traz as mudanças da Receita e roda os testes. Se passarem, publica no `main`; se houver conflito ou falha, empurra a branch `sync/receita-<sha>` e abre uma issue para revisão.
 
 ## Uso
 
