@@ -1,0 +1,67 @@
+name: Sincroniza com a Receita
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Busca o repositório da Receita
+        run: |
+          git remote add upstream https://github.com/ReceitaFederal/calculadora-rtc-gerador-danfse.git
+          git fetch upstream main --tags
+
+      - name: Verifica se há novidades
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "atualizado=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "atualizado=false" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mescla a versão da Receita
+        if: steps.check.outputs.atualizado == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "sync/receita-${{ steps.check.outputs.sha }}"
+          git merge --no-edit upstream/main
+
+      - uses: actions/setup-go@v5
+        if: steps.check.outputs.atualizado == 'false'
+        with:
+          go-version-file: go.mod
+
+      - name: Testes
+        if: steps.check.outputs.atualizado == 'false'
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: Abre o PR de sincronização
+        if: steps.check.outputs.atualizado == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="sync/receita-${{ steps.check.outputs.sha }}"
+          git push origin "$BRANCH" --tags
+          if gh pr list --head "$BRANCH" --json number --jq '.[0].number' | grep -q .; then
+            exit 0
+          fi
+          gh pr create --base main --head "$BRANCH" \
+            --title "Sincroniza com a Receita (${{ steps.check.outputs.sha }})" \
+            --body "Traz as mudanças do repositório oficial da Receita Federal. Os testes da Receita e do pacote pkg/danfse passaram."
