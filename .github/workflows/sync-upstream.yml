@@ -1,0 +1,86 @@
+name: Sincroniza com a Receita
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Busca o repositório da Receita
+        run: |
+          git remote add upstream https://github.com/ReceitaFederal/calculadora-rtc-gerador-danfse.git
+          git fetch upstream main --tags
+
+      - name: Verifica se há novidades
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "atualizado=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "atualizado=false" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mescla a versão da Receita
+        id: merge
+        if: steps.check.outputs.atualizado == 'false'
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "sync/receita-${{ steps.check.outputs.sha }}"
+          git merge --no-edit upstream/main
+
+      - uses: actions/setup-go@v5
+        if: steps.check.outputs.atualizado == 'false' && steps.merge.outcome == 'success'
+        with:
+          go-version-file: go.mod
+
+      - name: Testes
+        id: tests
+        if: steps.check.outputs.atualizado == 'false' && steps.merge.outcome == 'success'
+        continue-on-error: true
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: Publica no main
+        if: steps.check.outputs.atualizado == 'false' && steps.merge.outcome == 'success' && steps.tests.outcome == 'success'
+        run: |
+          git push origin "HEAD:main"
+          git push origin --tags
+
+      - name: Abre issue quando precisa de revisão
+        if: steps.check.outputs.atualizado == 'false' && (steps.merge.outcome != 'success' || steps.tests.outcome != 'success')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="sync/receita-${{ steps.check.outputs.sha }}"
+          if [ "${{ steps.merge.outcome }}" = "success" ]; then
+            git push origin "$BRANCH"
+            MOTIVO="Os testes falharam depois de trazer a versão da Receita."
+          else
+            git merge --abort || true
+            MOTIVO="A versão da Receita tem conflito com o pacote pkg/danfse."
+          fi
+          TITULO="Sincronização com a Receita precisa de revisão (${{ steps.check.outputs.sha }})"
+          if gh issue list --state open --search "$TITULO" --json number --jq '.[0].number' | grep -q .; then
+            exit 0
+          fi
+          gh issue create --title "$TITULO" --body "$MOTIVO
+
+          Branch: \`$BRANCH\`
+          Comparar: ${{ github.server_url }}/${{ github.repository }}/compare/main...$BRANCH
+          Execução: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
