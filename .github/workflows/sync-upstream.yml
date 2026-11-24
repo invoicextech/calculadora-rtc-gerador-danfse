@@ -67,20 +67,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BRANCH="sync/receita-${{ steps.check.outputs.sha }}"
+          SHA="${{ steps.check.outputs.sha }}"
+          BRANCH="sync/receita-$SHA"
           if [ "${{ steps.merge.outcome }}" = "success" ]; then
-            git push origin "$BRANCH"
             MOTIVO="Os testes falharam depois de trazer a versão da Receita."
           else
             git merge --abort || true
-            MOTIVO="A versão da Receita tem conflito com o pacote pkg/danfse."
+            git switch -C "$BRANCH" upstream/main
+            MOTIVO="A versão da Receita tem conflito com o pacote pkg/danfse. Resolva o conflito no PR."
           fi
-          TITULO="Sincronização com a Receita precisa de revisão (${{ steps.check.outputs.sha }})"
+          git push --force origin "$BRANCH"
+          TITULO="Sincronização com a Receita precisa de revisão ($SHA)"
           if gh issue list --state open --search "$TITULO" --json number --jq '.[0].number' | grep -q .; then
             exit 0
           fi
+          TITULO_PR="Sincroniza com a Receita ($SHA)"
+          CORPO_PR="Traz as mudanças do repositório oficial da Receita Federal (upstream/main $SHA). $MOTIVO"
+          ENC_TITULO=$(jq -rn --arg v "$TITULO_PR" '$v|@uri')
+          ENC_CORPO=$(jq -rn --arg v "$CORPO_PR" '$v|@uri')
+          LINK="${{ github.server_url }}/${{ github.repository }}/compare/main...$BRANCH?expand=1&title=$ENC_TITULO&body=$ENC_CORPO"
           gh issue create --title "$TITULO" --body "$MOTIVO
 
-          Branch: \`$BRANCH\`
-          Comparar: ${{ github.server_url }}/${{ github.repository }}/compare/main...$BRANCH
+          Criar o PR (já preenchido): $LINK
+
           Execução: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
